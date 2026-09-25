@@ -66,6 +66,15 @@
             <div id="leg-buttons" class="leg-buttons"></div>
           </div>
           <div class="control-block">
+            <h3>安全窗口复核</h3>
+            <div class="row">
+              <label for="extra-error">统一附加定位误差</label>
+              <input type="number" id="extra-error" min="0" step="any" value="0" />
+              <button id="review-window" type="button" class="primary">发起复核</button>
+            </div>
+            <p class="fine-print">误差叠加到每个姿态的不确定半径上，仅针对当前已部署支腿形成的支承面，核算各姿态可停留的投影中心区域。</p>
+          </div>
+          <div class="control-block">
             <h3>会话</h3>
             <button id="new-session" type="button">重新录入参数</button>
           </div>
@@ -74,9 +83,22 @@
             <span class="swatch swatch-leg"></span>已部署支腿
             <span class="swatch swatch-leg-off"></span>已收起支腿
             <span class="swatch swatch-disk"></span>当前载荷圆盘
+            <span class="swatch swatch-window"></span>安全窗口
           </p>
         </div>
       </div>
+      <section id="review-panel" class="hidden">
+        <h3>安全窗口复核结果</h3>
+        <p id="review-meta" class="fine-print"></p>
+        <p id="review-stale" class="stale-warning hidden"></p>
+        <table id="review-table">
+          <thead>
+            <tr><th>姿态</th><th>有效半径</th><th>中心在窗口内</th><th>距最近安全边界裕量</th><th>结论</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="fine-print">点击表格行可在视图中查看该姿态的安全窗口区域（金色）；边界接触仍安全。</p>
+      </section>
       <p id="op-message" class="error"></p>
     </section>
   </main>

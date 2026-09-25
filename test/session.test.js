@@ -157,3 +157,63 @@ test('未知会话返回 404', () => {
   assert.equal(store.applyOp('nope', 0, { type: 'switch_posture', posture: 0 }).status, 404);
   assert.equal(store.getState('nope'), null);
 });
+
+test('安全窗口复核：逐姿态给出区域/内外/裕量，对应提交修订号，且不写轨迹', () => {
+  const store = new SessionStore(null);
+  const { sessionId } = store.createSession(sampleSetup());
+
+  const r = store.reviewSafetyWindow(sessionId, 1, 0.5);
+  assert.equal(r.ok, true);
+  assert.equal(r.review.revision, 1, '复核结果必须对应提交时的修订号');
+  assert.equal(r.review.extraError, 0.5);
+  assert.equal(r.review.supportOk, true);
+  assert.equal(r.review.postures.length, 4);
+  for (const w of r.review.postures) {
+    assert.ok(w.region && typeof w.region.kind === 'string');
+    assert.equal(typeof w.centerInside, 'boolean');
+    assert.equal(typeof w.margin, 'number');
+    assert.ok(w.conclusion.length > 0, '每个姿态都必须有可解释结论');
+    assert.equal(w.effectiveRadius, w.ownRadius + 0.5, '附加误差叠加到姿态自身半径');
+  }
+  // 越界姿态 P3（r=2.5+0.5）窗口为空但结论可解释
+  assert.equal(r.review.postures[2].region.kind, 'empty');
+  assert.match(r.review.postures[2].conclusion, /为空/);
+  // 相切姿态 P2（r=2+0.5=2.5>2）同样为空；P1 在窗口内
+  assert.equal(r.review.postures[0].centerInside, true);
+
+  assert.equal(store.getEvents(sessionId).length, 1, '复核是只读的，不得写入事件轨迹');
+  assert.equal(store.getState(sessionId).revision, 1);
+});
+
+test('安全窗口复核：接受操作后旧修订号复核 409，可用新修订号重新复核', () => {
+  const store = new SessionStore(null);
+  const { sessionId } = store.createSession(sampleSetup());
+
+  const before = store.reviewSafetyWindow(sessionId, 1, 0.2);
+  assert.equal(before.ok, true);
+
+  store.applyOp(sessionId, 1, { type: 'switch_posture', posture: 1 }); // 修订号推进到 2
+
+  const stale = store.reviewSafetyWindow(sessionId, 1, 0.2);
+  assert.equal(stale.ok, false, '已接受操作后旧复核不得冒充当前结论');
+  assert.equal(stale.status, 409);
+  assert.match(stale.error, /修订号过期/);
+  assert.equal(stale.state.revision, 2, '409 响应携带最新状态以便重同步');
+
+  const again = store.reviewSafetyWindow(sessionId, 2, 0.2);
+  assert.equal(again.ok, true, '人员可以新修订号重新复核');
+  assert.equal(again.review.revision, 2);
+  assert.equal(again.review.currentPosture, 1, '复核针对最新重放状态');
+});
+
+test('安全窗口复核：非法附加误差与未知会话', () => {
+  const store = new SessionStore(null);
+  const { sessionId } = store.createSession(sampleSetup());
+
+  assert.equal(store.reviewSafetyWindow(sessionId, 1, -0.1).status, 400);
+  assert.equal(store.reviewSafetyWindow(sessionId, 1, NaN).status, 400);
+  assert.equal(store.reviewSafetyWindow(sessionId, 1).status, 400);
+  assert.equal(store.reviewSafetyWindow(sessionId, '1', 0.1).status, 400);
+  assert.equal(store.reviewSafetyWindow('nope', 1, 0.1).status, 404);
+  assert.equal(store.getEvents(sessionId).length, 1, '被拒绝的复核不写入轨迹');
+});

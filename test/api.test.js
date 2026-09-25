@@ -116,6 +116,54 @@ test('错误请求：坏 JSON / 未知路由 / 未知会话', async () => {
   });
 });
 
+test('安全窗口复核 API：逐姿态区域结论、修订号语义、不污染轨迹', async () => {
+  await withServer(async (base) => {
+    const created = await (await post(base, '/api/sessions', setup())).json();
+    const sid = created.sessionId;
+
+    // 以当前所见修订号发起复核
+    const res = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 1, extraError: 0.25 });
+    assert.equal(res.status, 200);
+    const review = await res.json();
+    assert.equal(review.revision, 1, '复核结果对应提交时的修订号');
+    assert.equal(review.extraError, 0.25);
+    assert.equal(review.postures.length, 4);
+    for (const w of review.postures) {
+      assert.ok(['polygon', 'segment', 'point', 'empty'].includes(w.region.kind));
+      assert.equal(typeof w.centerInside, 'boolean');
+      assert.equal(typeof w.margin, 'number');
+      assert.ok(w.conclusion.length > 0);
+    }
+    // 方形 ±2、附加 0.25：所有姿态（r=0.5→0.75）中心都在窗口内
+    assert.ok(review.postures.every((w) => w.centerInside));
+
+    // 复核是只读的：轨迹与修订号不变
+    const events = await (await fetch(`${base}/api/sessions/${sid}/events`)).json();
+    assert.equal(events.events.length, 1);
+
+    // 接受一个操作后，旧修订号复核必须 409，不得冒充当前结论
+    const op = await post(base, `/api/sessions/${sid}/ops`, {
+      baseRevision: 1,
+      op: { type: 'switch_posture', posture: 1 },
+    });
+    assert.equal(op.status, 200);
+    const stale = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 1, extraError: 0.25 });
+    assert.equal(stale.status, 409);
+    const staleBody = await stale.json();
+    assert.equal(staleBody.state.revision, 2, '409 携带最新状态以便重同步');
+
+    // 以新修订号重新复核成功
+    const again = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 2, extraError: 0 });
+    assert.equal(again.status, 200);
+    assert.equal((await again.json()).revision, 2);
+
+    // 非法附加误差 / 未知会话
+    assert.equal((await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 2, extraError: -1 })).status, 400);
+    assert.equal((await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 2 })).status, 400);
+    assert.equal((await post(base, '/api/sessions/nope/safety-window', { baseRevision: 1, extraError: 0 })).status, 404);
+  });
+});
+
 test('静态目录路径穿越被拒绝', async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/../src/server.js`);

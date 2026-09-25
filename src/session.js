@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { EVENT_TYPES, replay } = require('./events');
-const { isFiniteNumber, evaluateSupport } = require('./geometry');
+const { isFiniteNumber, evaluateSupport, assessSafetyWindows } = require('./geometry');
 
 const MIN_LEGS = 4;
 const MAX_LEGS = 6;
@@ -211,6 +211,47 @@ class SessionStore {
       at: new Date().toISOString(),
     });
     return { ok: true, state: this.getState(id) };
+  }
+
+  /**
+   * 安全窗口复核（只读，不写入事件轨迹）：
+   * 把统一附加定位误差叠加到每个姿态的不确定半径上，按提交时的修订号
+   * 核算当前已部署支腿支承面内各姿态可停留的投影中心区域。
+   * 修订号过期 => 409 并携带最新状态，人员可以新修订号重新复核。
+   */
+  reviewSafetyWindow(id, baseRevision, extraError) {
+    const session = this.sessions.get(id);
+    if (!session) return fail(404, '演练会话不存在');
+
+    const revision = session.events.length;
+    const reject = (status, error) => ({ ok: false, status, error, state: this.getState(id) });
+
+    if (!Number.isInteger(baseRevision)) {
+      return reject(400, '复核必须携带整数修订号 baseRevision');
+    }
+    if (baseRevision !== revision) {
+      return reject(409, `修订号过期：所见为 ${baseRevision}，当前为 ${revision}，请按最新状态重新复核`);
+    }
+    if (!isFiniteNumber(extraError) || extraError < 0) {
+      return reject(400, '统一附加定位误差必须是非负有限数值');
+    }
+
+    const projected = replay(session.events);
+    const assessment = assessSafetyWindows(projected.legs, projected.postures, extraError);
+    return {
+      ok: true,
+      review: {
+        sessionId: id,
+        revision,
+        extraError,
+        computedAt: new Date().toISOString(),
+        currentPosture: projected.currentPosture,
+        supportPolygon: assessment.supportPolygon,
+        supportOk: assessment.supportOk,
+        supportReason: assessment.supportReason,
+        postures: assessment.postures.map((w, i) => ({ id: i, ...w })),
+      },
+    };
   }
 }
 

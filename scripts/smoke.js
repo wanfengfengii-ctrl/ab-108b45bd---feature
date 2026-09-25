@@ -130,7 +130,55 @@ async function run(base) {
   r = await post(base, `/api/sessions/${sid}/ops`, { baseRevision: 5, op: { type: 'toggle_leg', leg: 0, deployed: true } });
   check('重新展开 L1 被接受', r.status === 200 && r.body.state.safe === true);
 
-  // 9. 非法录入：初始即不安全 / 支腿数越界 / 负半径
+  // 9. 安全窗口复核：统一附加误差叠加到各姿态半径，逐姿态给出区域结论
+  r = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 6, extraError: 0.25 });
+  check('安全窗口复核返回 200', r.status === 200, `got ${r.status}: ${JSON.stringify(r.body)}`);
+  check('复核结果对应提交时的修订号 6', r.body.revision === 6);
+  check(
+    '每个姿态都有区域/内外/裕量/结论',
+    Array.isArray(r.body.postures)
+      && r.body.postures.length === 4
+      && r.body.postures.every((p) => p.region && typeof p.region.kind === 'string'
+        && typeof p.centerInside === 'boolean' && typeof p.margin === 'number'
+        && typeof p.conclusion === 'string' && p.conclusion.length > 0),
+  );
+  const w1 = r.body.postures[0];
+  check('P1 有效半径 = 自身半径 + 附加误差', Math.abs(w1.effectiveRadius - 0.75) < 1e-12);
+  check('P1 中心在窗口内且裕量为正', w1.centerInside === true && w1.margin > 0, JSON.stringify(w1));
+  const w2 = r.body.postures[1];
+  check(
+    'P2 有效半径 2.25 超内切圆：窗口为空且结论可解释',
+    w2.region.kind === 'empty' && w2.centerInside === false && /为空/.test(w2.conclusion),
+    JSON.stringify(w2),
+  );
+
+  // 10. 复核的修订号语义：过期 409、负误差 400、只读不写轨迹
+  r = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 3, extraError: 0.25 });
+  check('过期修订号的复核被拒绝（409）', r.status === 409 && r.body.state.revision === 6, `got ${r.status}`);
+
+  r = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 6, extraError: -0.1 });
+  check('负附加定位误差被拒绝（400）', r.status === 400, `got ${r.status}`);
+
+  r = await api(base, `/api/sessions/${sid}/events`);
+  check('复核不写入事件轨迹（仍为 6 条）', r.body.events.length === 6);
+
+  // 11. 接受新操作后旧复核不得冒充当前结论；可以新修订号重新复核
+  r = await post(base, `/api/sessions/${sid}/ops`, { baseRevision: 6, op: { type: 'switch_posture', posture: 3 } });
+  check('切换到 P4 被接受（修订号推进到 7）', r.status === 200 && r.body.state.revision === 7);
+
+  r = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 6, extraError: 0.25 });
+  check('操作后旧修订号复核被拒绝（409）', r.status === 409, `got ${r.status}`);
+
+  r = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 7, extraError: 0 });
+  check('以新修订号重新复核成功', r.status === 200 && r.body.revision === 7, `got ${r.status}`);
+  const tangent = r.body.postures && r.body.postures[1];
+  check(
+    '边界相切仍安全：P2 窗口退化为一点、裕量 0、中心判定在内',
+    tangent && tangent.region.kind === 'point' && tangent.centerInside === true && Math.abs(tangent.margin) < 1e-9,
+    JSON.stringify(tangent),
+  );
+
+  // 12. 非法录入：初始即不安全 / 支腿数越界 / 负半径
   r = await post(base, '/api/sessions', {
     legs: legs.slice(0, 4),
     postures: [{ x: 10, y: 10, r: 1 }, ...postures.slice(1)],
@@ -146,9 +194,11 @@ async function run(base) {
   });
   check('负不确定半径的录入被拒绝（400）', r.status === 400, `got ${r.status}`);
 
-  // 10. 不存在的会话
+  // 13. 不存在的会话
   r = await api(base, '/api/sessions/does-not-exist');
   check('未知会话返回 404', r.status === 404);
+  r = await post(base, '/api/sessions/does-not-exist/safety-window', { baseRevision: 1, extraError: 0 });
+  check('未知会话的复核返回 404', r.status === 404);
 }
 
 async function main() {

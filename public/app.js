@@ -10,6 +10,8 @@ const MAX_POSTURES = 8;
 const $ = (sel) => document.querySelector(sel);
 
 let session = null; // 最近一次从服务端拿到的状态视图
+let review = null; // 最近一次安全窗口复核结果（绑定其提交时的修订号）
+let reviewHighlight = null; // 视图中当前展示安全窗口的姿态 id
 let pollTimer = null;
 
 /* ---------------- 录入区 ---------------- */
@@ -111,6 +113,8 @@ async function startSession() {
     return;
   }
   session = body.state;
+  review = null;
+  reviewHighlight = null;
   $('#setup').classList.add('hidden');
   $('#rehearsal').classList.remove('hidden');
   $('#statusbar').classList.remove('hidden');
@@ -140,6 +144,32 @@ async function sendOp(op) {
   } else {
     // 拒绝（含修订号过期）：展示理由，并用返回的最新状态重新同步。
     $('#op-message').textContent = `已拒绝：${body.error || '未知原因'}`;
+    if (body.state) session = body.state;
+    else await refreshState();
+  }
+  renderAll();
+}
+
+/* 安全窗口复核：以当前所见修订号发起；复核结果只对应提交时的修订号。 */
+async function runReview() {
+  if (!session) return;
+  $('#op-message').textContent = '';
+  const raw = $('#extra-error').value.trim();
+  const extraError = Number(raw);
+  if (raw === '' || !Number.isFinite(extraError) || extraError < 0) {
+    $('#op-message').textContent = '复核被拒绝：统一附加定位误差必须是非负数值';
+    return;
+  }
+  const { status, body } = await api(`/api/sessions/${session.sessionId}/safety-window`, {
+    method: 'POST',
+    body: JSON.stringify({ baseRevision: session.revision, extraError }),
+  });
+  if (status === 200) {
+    review = body;
+    reviewHighlight = review.currentPosture;
+  } else {
+    // 修订号过期或请求非法：展示理由，并用返回的最新状态重新同步。
+    $('#op-message').textContent = `复核被拒绝：${body.error || '未知原因'}`;
     if (body.state) session = body.state;
     else await refreshState();
   }
@@ -191,6 +221,53 @@ function renderControls() {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+function fmtSigned(v) {
+  return `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
+}
+
+/* 复核结果表：结论只对应复核提交时的修订号；修订号被新操作推进后标记过期。 */
+function renderReview() {
+  const panel = $('#review-panel');
+  if (!review) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  const stale = review.revision !== session.revision;
+  panel.classList.toggle('stale', stale);
+  $('#review-meta').textContent =
+    `基于修订号 ${review.revision} · 统一附加定位误差 ${fmt(review.extraError)} · 复核时间 ${new Date(review.computedAt).toLocaleString()}`;
+  const staleEl = $('#review-stale');
+  if (stale) {
+    staleEl.textContent =
+      `当前修订号已推进到 ${session.revision}（已有被接受的操作），以下结论不再代表当前状态，请重新复核。`;
+    staleEl.classList.remove('hidden');
+  } else {
+    staleEl.classList.add('hidden');
+  }
+
+  const tbody = $('#review-table tbody');
+  tbody.innerHTML = '';
+  review.postures.forEach((w) => {
+    const tr = document.createElement('tr');
+    if (w.id === reviewHighlight) tr.classList.add('highlight');
+    const current = w.id === review.currentPosture ? '（复核时当前）' : '';
+    tr.innerHTML = `
+      <td>P${w.id + 1}${current}</td>
+      <td>${fmt(w.effectiveRadius)}</td>
+      <td class="${w.centerInside ? 'ok' : 'bad'}">${w.centerInside ? '是' : '否'}</td>
+      <td>${w.margin === null ? '—' : fmtSigned(w.margin)}</td>
+      <td>${w.conclusion}</td>`;
+    tr.title = '点击在视图中查看该姿态的安全窗口';
+    tr.addEventListener('click', () => {
+      reviewHighlight = w.id;
+      renderReview();
+      renderView();
+    });
+    tbody.appendChild(tr);
+  });
+}
+
 function svgEl(tag, attrs) {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
@@ -228,6 +305,28 @@ function renderView() {
       stroke: '#2da44e',
       'stroke-width': unit * 0.5,
     }));
+  }
+
+  // 安全窗口区域（仅当复核结论仍对应当前修订号时展示，过期结论不得冒充当前）
+  if (review && review.revision === session.revision && reviewHighlight != null) {
+    const w = review.postures[reviewHighlight];
+    if (w && w.region.kind === 'polygon') {
+      svg.appendChild(svgEl('polygon', {
+        points: w.region.vertices.map((v) => `${v.x},${Y(v.y)}`).join(' '),
+        fill: 'rgba(210,153,34,0.22)',
+        stroke: '#d29922',
+        'stroke-width': unit * 0.5,
+      }));
+    } else if (w && w.region.kind === 'segment') {
+      const [a, b] = w.region.vertices;
+      svg.appendChild(svgEl('line', {
+        x1: a.x, y1: Y(a.y), x2: b.x, y2: Y(b.y),
+        stroke: '#d29922', 'stroke-width': unit * 0.9, 'stroke-linecap': 'round',
+      }));
+    } else if (w && w.region.kind === 'point') {
+      const v = w.region.vertices[0];
+      svg.appendChild(svgEl('circle', { cx: v.x, cy: Y(v.y), r: unit * 1.3, fill: '#d29922' }));
+    }
   }
 
   // 其余姿态（淡显）
@@ -273,6 +372,7 @@ function renderAll() {
   renderStatus();
   renderControls();
   renderView();
+  renderReview();
 }
 
 function startPolling() {
@@ -290,9 +390,12 @@ $('#switch-posture').addEventListener('click', () => {
   const target = Number($('#posture-select').value);
   if (Number.isInteger(target)) sendOp({ type: 'switch_posture', posture: target });
 });
+$('#review-window').addEventListener('click', runReview);
 $('#new-session').addEventListener('click', () => {
   if (pollTimer) clearInterval(pollTimer);
   session = null;
+  review = null;
+  reviewHighlight = null;
   $('#rehearsal').classList.add('hidden');
   $('#statusbar').classList.add('hidden');
   $('#setup').classList.remove('hidden');

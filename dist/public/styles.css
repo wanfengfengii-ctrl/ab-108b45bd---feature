@@ -130,3 +130,26 @@ select {
 .swatch-leg { background: var(--safe); }
 .swatch-leg-off { background: #aeb8c2; }
 .swatch-disk { background: rgba(31, 111, 235, 0.25); border: 1px dashed var(--accent); border-radius: 50%; }
+.swatch-window { background: rgba(210, 153, 34, 0.3); border: 1px solid #d29922; }
+
+/* 安全窗口复核 */
+#extra-error { width: 110px; }
+.fine-print { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+
+#review-panel { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+#review-panel.stale #review-table { opacity: 0.55; }
+#review-table { width: 100%; }
+#review-table tbody tr { cursor: pointer; }
+#review-table tbody tr:hover { background: #f0f3f6; }
+#review-table tr.highlight { background: #fff8e6; }
+#review-table td.ok { color: var(--safe); font-weight: 700; }
+#review-table td.bad { color: var(--danger); font-weight: 700; }
+
+.stale-warning {
+  color: #9a6700;
+  background: #fff8e6;
+  border: 1px solid #eac54f;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+}

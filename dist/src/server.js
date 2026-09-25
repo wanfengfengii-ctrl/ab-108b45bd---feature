@@ -119,6 +119,16 @@ function createServer(store) {
             sendJson(res, 200, result);
             return;
           }
+          if (req.method === 'POST' && parts[3] === 'safety-window' && parts.length === 4) {
+            const body = await readJson(req);
+            const result = store.reviewSafetyWindow(id, body.baseRevision, body.extraError);
+            if (!result.ok) {
+              sendJson(res, result.status, { error: result.error, state: result.state || null });
+              return;
+            }
+            sendJson(res, 200, result.review);
+            return;
+          }
         }
 
         sendJson(res, 404, { error: '接口不存在' });
