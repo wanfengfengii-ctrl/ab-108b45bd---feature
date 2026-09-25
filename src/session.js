@@ -4,7 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { EVENT_TYPES, replay } = require('./events');
-const { isFiniteNumber, evaluateSupport } = require('./geometry');
+const {
+  isFiniteNumber,
+  convexHull,
+  isDegeneratePolygon,
+  assessSafetyWindow,
+  evaluateSupport,
+} = require('./geometry');
 
 const MIN_LEGS = 4;
 const MAX_LEGS = 6;
@@ -211,6 +217,62 @@ class SessionStore {
       at: new Date().toISOString(),
     });
     return { ok: true, state: this.getState(id) };
+  }
+
+  /**
+   * 安全窗口复核（只读，不写入事件轨迹）：
+   * 以提交时的修订号为准，把统一附加定位误差加到每个姿态的不确定半径上，
+   * 针对当前已部署支腿形成的支承面，逐姿态评估可放置投影中心的闭合区域、
+   * 当前中心是否落入以及距最近安全边界的裕量。
+   */
+  reviewSafetyWindow(id, baseRevision, extraError) {
+    const session = this.sessions.get(id);
+    if (!session) return fail(404, '演练会话不存在');
+
+    const revision = session.events.length;
+    const reject = (status, error) => ({ ok: false, status, error, state: this.getState(id) });
+
+    if (!Number.isInteger(baseRevision)) {
+      return reject(400, '复核必须携带整数修订号 baseRevision');
+    }
+    if (baseRevision !== revision) {
+      return reject(409, `修订号过期：所见为 ${baseRevision}，当前为 ${revision}，请按最新状态重新复核`);
+    }
+    if (!isFiniteNumber(extraError) || extraError < 0) {
+      return reject(400, '统一附加定位误差必须是非负有限数值');
+    }
+
+    const projected = replay(session.events);
+    const hull = convexHull(projected.legs.filter((l) => l.deployed));
+    const hullValid = !isDegeneratePolygon(hull);
+
+    const postures = projected.postures.map((p, i) => {
+      const effectiveRadius = p.r + extraError;
+      if (!hullValid) {
+        return {
+          id: i,
+          effectiveRadius,
+          region: [],
+          empty: true,
+          degenerate: false,
+          inside: false,
+          margin: null,
+          conclusion: '已部署支腿不足 3 只或共线，支承面退化，安全窗口为空',
+        };
+      }
+      return { id: i, effectiveRadius, ...assessSafetyWindow(hull, p, effectiveRadius) };
+    });
+
+    return {
+      ok: true,
+      review: {
+        sessionId: id,
+        revision,
+        extraError,
+        supportPolygon: hull,
+        postures,
+      },
+    };
   }
 }
 

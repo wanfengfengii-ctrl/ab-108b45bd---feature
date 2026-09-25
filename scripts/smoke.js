@@ -116,10 +116,30 @@ async function run(base) {
   r = await post(base, `/api/sessions/${sid}/ops`, { baseRevision: 5, op: { type: 'switch_posture', posture: 3 } });
   check('三角支承下越界姿态被拒绝（422）', r.status === 422 && /越出/.test(r.body.error || ''), r.body.error);
 
-  // 7. 事件轨迹：只含被接受的操作
+  // 6.5 安全窗口复核：当前为三角支承（修订号 5），附加误差 0.25
+  r = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 5, extraError: 0.25 });
+  check('安全窗口复核返回 200', r.status === 200, JSON.stringify(r.body));
+  check('复核结果对应提交时修订号', r.body.revision === 5);
+  check('复核只针对当前已部署支腿的三角支承面', r.body.supportPolygon && r.body.supportPolygon.length === 3);
+  const ws = r.body.postures || [];
+  check(
+    '每个姿态都有闭合区域/落入判定/裕量/可解释结论',
+    ws.length === 4
+      && ws.every((w) => Array.isArray(w.region)
+        && typeof w.inside === 'boolean'
+        && typeof w.margin === 'number'
+        && typeof w.conclusion === 'string'
+        && w.conclusion.length > 0),
+    JSON.stringify(ws),
+  );
+  check('有效半径 = 自身半径 + 附加误差', Math.abs((ws[0] || {}).effectiveRadius - 0.75) < 1e-12);
+  check('当前姿态 P1 在附加误差下仍可停留（裕量 0.35）', ws[0] && ws[0].inside === true && Math.abs(ws[0].margin - 0.35) < 1e-9, JSON.stringify(ws[0]));
+  check('P4 越出安全窗口且结论可解释', ws[3] && ws[3].inside === false && ws[3].margin < 0 && /越出/.test(ws[3].conclusion), JSON.stringify(ws[3]));
+
+  // 7. 事件轨迹：只含被接受的操作（复核是只读的，不得入轨迹）
   const events = await api(base, `/api/sessions/${sid}/events`);
   const types = (events.body.events || []).map((e) => e.type);
-  check('轨迹长度 = 修订号 = 5', events.body.events.length === 5);
+  check('轨迹长度 = 修订号 = 5（复核未写入轨迹）', events.body.events.length === 5);
   check(
     '轨迹只记录被接受的操作',
     JSON.stringify(types) === JSON.stringify(['session_created', 'posture_switched', 'posture_switched', 'leg_toggled', 'leg_toggled']),
@@ -149,6 +169,47 @@ async function run(base) {
   // 10. 不存在的会话
   r = await api(base, '/api/sessions/does-not-exist');
   check('未知会话返回 404', r.status === 404);
+
+  // 11. 安全窗口专项：边界接触仍安全、窗口为空可解释、过期修订号与负误差被拒绝
+  const sq = await post(base, '/api/sessions', {
+    legs: [
+      { x: -2, y: -2, deployed: true },
+      { x: 2, y: -2, deployed: true },
+      { x: 2, y: 2, deployed: true },
+      { x: -2, y: 2, deployed: true },
+    ],
+    postures: [
+      { x: 0, y: 0, r: 2 }, // 与四边相切
+      { x: 0, y: 0, r: 0.5 },
+      { x: 0, y: 0, r: 1 },
+      { x: 0.5, y: 0, r: 1 },
+    ],
+  });
+  check('专项会话创建成功（201）', sq.status === 201, JSON.stringify(sq.body));
+  const sid2 = sq.body.sessionId;
+
+  r = await post(base, `/api/sessions/${sid2}/safety-window`, { baseRevision: 1, extraError: 0 });
+  check(
+    '边界接触（裕量 0）仍判定为可停留',
+    r.status === 200
+      && r.body.postures[0].inside === true
+      && Math.abs(r.body.postures[0].margin) < 1e-9
+      && r.body.postures[0].degenerate === true,
+    JSON.stringify(r.body.postures && r.body.postures[0]),
+  );
+
+  r = await post(base, `/api/sessions/${sid2}/safety-window`, { baseRevision: 1, extraError: 2.5 });
+  check(
+    '安全窗口为空时给出可解释结论',
+    r.status === 200 && r.body.postures[1].empty === true && /为空/.test(r.body.postures[1].conclusion),
+    JSON.stringify(r.body.postures && r.body.postures[1]),
+  );
+
+  r = await post(base, `/api/sessions/${sid2}/safety-window`, { baseRevision: 7, extraError: 0 });
+  check('复核携带过期修订号被拒绝（409）', r.status === 409, `got ${r.status}`);
+
+  r = await post(base, `/api/sessions/${sid2}/safety-window`, { baseRevision: 1, extraError: -0.1 });
+  check('负附加定位误差被拒绝（400）', r.status === 400, `got ${r.status}`);
 }
 
 async function main() {

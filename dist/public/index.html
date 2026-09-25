@@ -66,6 +66,14 @@
             <div id="leg-buttons" class="leg-buttons"></div>
           </div>
           <div class="control-block">
+            <h3>安全窗口复核</h3>
+            <div class="row">
+              <input type="number" id="extra-error" min="0" step="any" value="0.2" title="统一附加定位误差（非负）" />
+              <button id="review-window" type="button" class="primary">复核安全窗口</button>
+            </div>
+            <p class="hint-small">统一附加定位误差（非负）：与每个姿态的不确定半径相加，针对当前已部署支腿的支承面，逐姿态求可停留的投影中心区域。</p>
+          </div>
+          <div class="control-block">
             <h3>会话</h3>
             <button id="new-session" type="button">重新录入参数</button>
           </div>
@@ -74,10 +82,22 @@
             <span class="swatch swatch-leg"></span>已部署支腿
             <span class="swatch swatch-leg-off"></span>已收起支腿
             <span class="swatch swatch-disk"></span>当前载荷圆盘
+            <span class="swatch swatch-window"></span>当前姿态安全窗口
           </p>
         </div>
       </div>
       <p id="op-message" class="error"></p>
+
+      <section id="review-panel" class="hidden">
+        <h3>安全窗口复核结果 <span id="review-meta" class="review-meta"></span></h3>
+        <p id="review-stale" class="error hidden"></p>
+        <table id="review-table">
+          <thead>
+            <tr><th>姿态</th><th>有效半径</th><th>安全窗口区域</th><th>当前中心在窗口内</th><th>距最近安全边界裕量</th><th>结论</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
     </section>
   </main>
 

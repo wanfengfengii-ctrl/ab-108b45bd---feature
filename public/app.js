@@ -10,6 +10,7 @@ const MAX_POSTURES = 8;
 const $ = (sel) => document.querySelector(sel);
 
 let session = null; // 最近一次从服务端拿到的状态视图
+let lastReview = null; // 最近一次安全窗口复核结果（含其对应的修订号）
 let pollTimer = null;
 
 /* ---------------- 录入区 ---------------- */
@@ -111,6 +112,7 @@ async function startSession() {
     return;
   }
   session = body.state;
+  lastReview = null;
   $('#setup').classList.add('hidden');
   $('#rehearsal').classList.remove('hidden');
   $('#statusbar').classList.remove('hidden');
@@ -140,6 +142,31 @@ async function sendOp(op) {
   } else {
     // 拒绝（含修订号过期）：展示理由，并用返回的最新状态重新同步。
     $('#op-message').textContent = `已拒绝：${body.error || '未知原因'}`;
+    if (body.state) session = body.state;
+    else await refreshState();
+  }
+  renderAll();
+}
+
+/* ---------------- 安全窗口复核 ---------------- */
+
+async function reviewWindow() {
+  if (!session) return;
+  $('#op-message').textContent = '';
+  const extraError = Number($('#extra-error').value);
+  if (!Number.isFinite(extraError) || extraError < 0) {
+    $('#op-message').textContent = '统一附加定位误差必须是非负数值';
+    return;
+  }
+  // 以当前所见修订号发起复核；服务端若已推进会返回 409 并携带最新状态。
+  const { status, body } = await api(`/api/sessions/${session.sessionId}/safety-window`, {
+    method: 'POST',
+    body: JSON.stringify({ baseRevision: session.revision, extraError }),
+  });
+  if (status === 200) {
+    lastReview = body;
+  } else {
+    $('#op-message').textContent = `复核被拒绝：${body.error || '未知原因'}`;
     if (body.state) session = body.state;
     else await refreshState();
   }
@@ -230,6 +257,25 @@ function renderView() {
     }));
   }
 
+  // 当前姿态的安全窗口区域（仅当复核结果对应当前修订号时才展示，过期结论不得冒充当前结论）
+  if (lastReview && lastReview.revision === session.revision) {
+    const w = lastReview.postures[session.currentPosture];
+    if (w && w.region.length >= 2) {
+      svg.appendChild(svgEl('polygon', {
+        points: w.region.map((v) => `${v.x},${Y(v.y)}`).join(' '),
+        fill: 'rgba(31,111,235,0.10)',
+        stroke: '#1f6feb',
+        'stroke-width': unit * 0.4,
+        'stroke-dasharray': `${unit * 1.2} ${unit * 0.8}`,
+      }));
+    } else if (w && w.region.length === 1) {
+      svg.appendChild(svgEl('circle', {
+        cx: w.region[0].x, cy: Y(w.region[0].y), r: unit * 1.1,
+        fill: 'none', stroke: '#1f6feb', 'stroke-width': unit * 0.4,
+      }));
+    }
+  }
+
   // 其余姿态（淡显）
   session.postures.forEach((p) => {
     if (p.id === session.currentPosture) return;
@@ -268,11 +314,49 @@ function renderView() {
   });
 }
 
+function renderReview() {
+  const panel = $('#review-panel');
+  if (!lastReview) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  // 复核结果只对提交时的修订号有效：演练一旦发生已接受操作，旧结论必须标记过期。
+  const stale = lastReview.revision !== session.revision;
+  $('#review-meta').textContent = `（对应修订号 ${lastReview.revision}，附加误差 ${fmt(lastReview.extraError)}）`;
+  const staleEl = $('#review-stale');
+  if (stale) {
+    staleEl.textContent = `演练已推进至修订号 ${session.revision}，以下结论对应修订号 ${lastReview.revision}，已过期，不得作为当前依据，请重新复核。`;
+    staleEl.classList.remove('hidden');
+    panel.classList.add('stale');
+  } else {
+    staleEl.classList.add('hidden');
+    panel.classList.remove('stale');
+  }
+  const tbody = $('#review-table tbody');
+  tbody.innerHTML = '';
+  lastReview.postures.forEach((w) => {
+    const tr = document.createElement('tr');
+    if (w.id === session.currentPosture) tr.classList.add('current-row');
+    const regionText = w.empty ? '空' : (w.degenerate ? '退化（点/线段）' : `闭合 ${w.region.length} 边形`);
+    const marginText = w.margin === null ? '—' : fmt(w.margin);
+    tr.innerHTML = `
+      <td>P${w.id + 1}</td>
+      <td>${fmt(w.effectiveRadius)}</td>
+      <td>${regionText}</td>
+      <td>${w.inside ? '是' : '否'}</td>
+      <td>${marginText}</td>
+      <td>${w.conclusion}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
 function renderAll() {
   if (!session) return;
   renderStatus();
   renderControls();
   renderView();
+  renderReview();
 }
 
 function startPolling() {
@@ -290,9 +374,11 @@ $('#switch-posture').addEventListener('click', () => {
   const target = Number($('#posture-select').value);
   if (Number.isInteger(target)) sendOp({ type: 'switch_posture', posture: target });
 });
+$('#review-window').addEventListener('click', reviewWindow);
 $('#new-session').addEventListener('click', () => {
   if (pollTimer) clearInterval(pollTimer);
   session = null;
+  lastReview = null;
   $('#rehearsal').classList.add('hidden');
   $('#statusbar').classList.add('hidden');
   $('#setup').classList.remove('hidden');

@@ -130,3 +130,15 @@ select {
 .swatch-leg { background: var(--safe); }
 .swatch-leg-off { background: #aeb8c2; }
 .swatch-disk { background: rgba(31, 111, 235, 0.25); border: 1px dashed var(--accent); border-radius: 50%; }
+.swatch-window { background: rgba(31, 111, 235, 0.12); border: 1px dashed var(--accent); }
+
+.hint-small { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+
+#extra-error { width: 110px; }
+
+#review-panel { margin-top: 16px; }
+#review-panel .review-meta { color: var(--muted); font-size: 12px; font-weight: 400; }
+#review-panel.stale #review-table { opacity: 0.45; }
+#review-table { width: 100%; }
+#review-table td:last-child { max-width: 420px; }
+#review-table tr.current-row td { background: #eef4ff; font-weight: 600; }

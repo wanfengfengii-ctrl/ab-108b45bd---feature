@@ -157,3 +157,93 @@ test('未知会话返回 404', () => {
   assert.equal(store.applyOp('nope', 0, { type: 'switch_posture', posture: 0 }).status, 404);
   assert.equal(store.getState('nope'), null);
 });
+
+test('安全窗口复核：逐姿态给出区域/落入/裕量/结论，且不写轨迹', () => {
+  const store = new SessionStore(null);
+  const setup = sampleSetup();
+  const { sessionId } = store.createSession(setup);
+
+  const r = store.reviewSafetyWindow(sessionId, 1, 0.25);
+  assert.equal(r.ok, true);
+  assert.equal(r.review.revision, 1, '复核结果对应提交时的修订号');
+  assert.equal(r.review.extraError, 0.25);
+  assert.equal(r.review.supportPolygon.length, 4);
+  assert.equal(r.review.postures.length, setup.postures.length);
+  for (const w of r.review.postures) {
+    const expected = setup.postures[w.id].r + 0.25;
+    assert.ok(Math.abs(w.effectiveRadius - expected) < 1e-12, '有效半径 = 自身半径 + 附加误差');
+    assert.equal(typeof w.inside, 'boolean');
+    assert.equal(typeof w.margin, 'number');
+    assert.ok(Array.isArray(w.region));
+    assert.ok(w.conclusion, '每个姿态都必须有可解释结论');
+  }
+  // P1 (0.8,0.2,r=0.3)+0.25=0.55 在 [±2]² 内：窗口 [±1.45]²，裕量 1.45-0.8=0.65
+  const p1 = r.review.postures[0];
+  assert.equal(p1.inside, true);
+  assert.ok(Math.abs(p1.margin - 0.65) < 1e-9);
+  assert.equal(p1.region.length, 4);
+  // P2 (0,0,r=2)+0.25=2.25 > 内切半径 2：窗口为空
+  const p2 = r.review.postures[1];
+  assert.equal(p2.empty, true);
+  assert.equal(p2.inside, false);
+  assert.match(p2.conclusion, /为空/);
+
+  assert.equal(store.getEvents(sessionId).length, 1, '复核是只读操作，不得写入事件轨迹');
+  assert.equal(store.getState(sessionId).revision, 1);
+});
+
+test('安全窗口复核：边界接触（裕量 0）仍判定为可停留', () => {
+  const store = new SessionStore(null);
+  const { sessionId } = store.createSession(sampleSetup());
+  const r = store.reviewSafetyWindow(sessionId, 1, 0);
+  assert.equal(r.ok, true);
+  // P2 (0,0,r=2) 与四边相切
+  const p2 = r.review.postures[1];
+  assert.equal(p2.inside, true, '边界接触仍安全');
+  assert.ok(Math.abs(p2.margin) < 1e-9);
+  assert.equal(p2.degenerate, true, '区域退化为点');
+  assert.match(p2.conclusion, /边界接触仍安全/);
+});
+
+test('安全窗口复核：修订号过期返回 409，已接受操作后须重新复核', () => {
+  const store = new SessionStore(null);
+  const { sessionId } = store.createSession(sampleSetup());
+
+  const stale = store.reviewSafetyWindow(sessionId, 99, 0.1);
+  assert.equal(stale.ok, false);
+  assert.equal(stale.status, 409);
+  assert.match(stale.error, /修订号过期/);
+  assert.equal(stale.state.revision, 1, '409 响应携带最新状态以便重同步');
+
+  // 发生已接受操作后，旧修订号的复核不再有效
+  store.applyOp(sessionId, 1, { type: 'switch_posture', posture: 1 });
+  const outdated = store.reviewSafetyWindow(sessionId, 1, 0.1);
+  assert.equal(outdated.status, 409);
+  const fresh = store.reviewSafetyWindow(sessionId, 2, 0.1);
+  assert.equal(fresh.ok, true);
+  assert.equal(fresh.review.revision, 2);
+});
+
+test('安全窗口复核：非法误差与未知会话', () => {
+  const store = new SessionStore(null);
+  const { sessionId } = store.createSession(sampleSetup());
+  assert.equal(store.reviewSafetyWindow(sessionId, 1, -0.1).status, 400);
+  assert.equal(store.reviewSafetyWindow(sessionId, 1, NaN).status, 400);
+  assert.equal(store.reviewSafetyWindow(sessionId, 1, Infinity).status, 400);
+  assert.equal(store.reviewSafetyWindow(sessionId, 'x', 0.1).status, 400);
+  assert.equal(store.reviewSafetyWindow('nope', 1, 0.1).status, 404);
+});
+
+test('安全窗口复核：只针对当时已部署支腿形成的支承面', () => {
+  const store = new SessionStore(null);
+  const setup = sampleSetup();
+  setup.legs.push({ x: 0, y: 3.4, deployed: true }); // 第 5 只支腿
+  const { sessionId } = store.createSession(setup);
+  // 收起 L5 后，支承面从五边形退回方形 [±2]²
+  store.applyOp(sessionId, 1, { type: 'toggle_leg', leg: 4, deployed: false });
+  const r = store.reviewSafetyWindow(sessionId, 2, 0);
+  assert.equal(r.ok, true);
+  assert.equal(r.review.supportPolygon.length, 4, '复核只基于当前已部署支腿');
+  // P1 (0.8,0.2,r=0.3)：方形窗口 [±1.7]²，裕量 1.7-0.8=0.9
+  assert.ok(Math.abs(r.review.postures[0].margin - 0.9) < 1e-9);
+});

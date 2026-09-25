@@ -7,6 +7,8 @@
 - 演练中每项操作只能是 **切换一个载荷姿态** 或 **收放一只支腿**，且必须携带所见修订号；
 - 服务端从**不可改写的本地事件轨迹**（只增 JSONL）重放状态；凸包完整包含当前载荷圆盘才安全，**边界相切视为安全**；
 - 会使圆盘越界、部署支腿不足以形成安全支承、或修订号过期的操作一律**明确拒绝且不写入轨迹**；
+- 定位系统发生系统性平移时，可填写**非负统一附加定位误差**发起**安全窗口复核**：误差与每个姿态的不确定半径相加，针对当前已部署支腿的支承面，逐姿态给出可放置投影中心的**闭合区域**、当前中心**是否落入**及距最近安全边界的**裕量**；区域退化或为空同样给出可解释结论，**边界接触仍安全**；
+- 复核是只读操作（不写轨迹），结果只对**提交时的修订号**有效；演练一旦发生已接受操作，旧结论即过期，须重新复核；
 - 页面持续显示：修订号、支腿状态、当前姿态、最近一次拒绝理由。
 
 ## 快速开始（Docker）
@@ -42,17 +44,18 @@ npm run verify     # = test + build + smoke
 | GET | `/api/sessions/:id` | 当前状态（由事件轨迹重放） |
 | GET | `/api/sessions/:id/events` | 只读事件轨迹 |
 | POST | `/api/sessions/:id/ops` | `{baseRevision, op}`；`op` 为 `{type:"switch_posture", posture}` 或 `{type:"toggle_leg", leg, deployed}` |
+| POST | `/api/sessions/:id/safety-window` | `{baseRevision, extraError}` 安全窗口复核（只读）；逐姿态返回 `{effectiveRadius, region, empty, degenerate, inside, margin, conclusion}` |
 
-拒绝语义：`400` 请求非法 · `409` 修订号过期 · `422` 业务拒绝（圆盘越界 / 支承不足 / 无变化操作）。拒绝响应携带最新 `state`，且**不会**写入事件轨迹。
+拒绝语义：`400` 请求非法 · `409` 修订号过期 · `422` 业务拒绝（圆盘越界 / 支承不足 / 无变化操作）。拒绝响应携带最新 `state`，且**不会**写入事件轨迹。安全窗口复核同样遵循 `400/409` 语义，且本身只读、绝不写入轨迹。
 
 ## 架构
 
 ```
-src/geometry.js   凸包（单调链）、圆盘-凸多边形包含（相切为安全）、支承评估
+src/geometry.js   凸包（单调链）、圆盘-凸多边形包含（相切为安全）、支承评估、安全窗口（半平面交集内缩）
 src/events.js     事件类型与纯函数 reducer；状态 = replay(events)
-src/session.js    录入校验、操作试算、轨迹追加（内存 + 只增 JSONL）
+src/session.js    录入校验、操作试算、轨迹追加（内存 + 只增 JSONL）、安全窗口复核
 src/server.js     零依赖 HTTP 服务：REST API + 静态页面
-public/           单页演练界面（SVG 视图、状态栏、操作面板）
+public/           单页演练界面（SVG 视图、状态栏、操作面板、安全窗口复核）
 scripts/build.js  构建：语法/资源校验 + dist/ 产物
 scripts/smoke.js  几何业务冒烟（可打 SMOKE_BASE_URL 指向的服务）
 test/             node:test 单元与 API 测试

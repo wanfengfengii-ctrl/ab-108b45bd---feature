@@ -6,6 +6,8 @@ const {
   convexHull,
   polygonArea,
   diskInsidePolygon,
+  erodePolygon,
+  assessSafetyWindow,
   evaluateSupport,
 } = require('../src/geometry');
 
@@ -89,4 +91,73 @@ test('支承评估：只统计已部署支腿', () => {
   const bad = evaluateSupport(legs, { x: 0, y: -2, r: 0.5 });
   assert.equal(bad.safe, false);
   assert.match(bad.reason, /越出/);
+});
+
+const square = () => convexHull([
+  { x: -2, y: -2 },
+  { x: 2, y: -2 },
+  { x: 2, y: 2 },
+  { x: -2, y: 2 },
+]);
+
+test('安全窗口区域：方形内缩为闭合小方形', () => {
+  const region = erodePolygon(square(), 0.5);
+  assert.equal(region.length, 4);
+  assert.ok(polygonArea(region) > 0, '区域仍为 CCW');
+  assert.equal(Math.abs(polygonArea(region)), 9, '内缩 0.5 后应为 [±1.5]²');
+});
+
+test('安全窗口区域：内缩至内切圆半径退化为点，再大则为空', () => {
+  const point = erodePolygon(square(), 2);
+  assert.ok(point.length >= 1 && point.length <= 3, '应退化为点状区域');
+  assert.ok(Math.abs(polygonArea(point)) < 1e-9 || point.length < 3);
+  assert.deepEqual(erodePolygon(square(), 2.0001), [], '超出内切圆半径应为空集');
+});
+
+test('安全窗口评估：内部中心的区域、落入判定与裕量', () => {
+  const w = assessSafetyWindow(square(), { x: 0, y: 0 }, 0.5);
+  assert.equal(w.empty, false);
+  assert.equal(w.degenerate, false);
+  assert.equal(w.region.length, 4);
+  assert.equal(w.inside, true);
+  assert.ok(Math.abs(w.margin - 1.5) < 1e-9, '中心距最近安全边界裕量 1.5');
+  assert.match(w.conclusion, /位于安全窗口内/);
+});
+
+test('安全窗口评估：边界接触（裕量 0）仍安全', () => {
+  const w = assessSafetyWindow(square(), { x: 0, y: 0 }, 2);
+  assert.equal(w.inside, true, '四边相切必须视为安全');
+  assert.ok(Math.abs(w.margin) < 1e-9);
+  assert.equal(w.empty, false);
+  assert.equal(w.degenerate, true, '区域退化为点');
+  assert.match(w.conclusion, /边界接触仍安全/);
+});
+
+test('安全窗口评估：区域为空时给出可解释结论', () => {
+  const w = assessSafetyWindow(square(), { x: 0, y: 0 }, 2.5);
+  assert.equal(w.empty, true);
+  assert.equal(w.inside, false);
+  assert.ok(w.margin < 0);
+  assert.match(w.conclusion, /为空/);
+});
+
+test('安全窗口评估：中心在窗口外时裕量为负且可解释', () => {
+  const w = assessSafetyWindow(square(), { x: 1.8, y: 0 }, 0.5);
+  assert.equal(w.inside, false);
+  assert.ok(Math.abs(w.margin + 0.3) < 1e-9, '中心越出最近安全边界 0.3');
+  assert.match(w.conclusion, /越出最近安全边界/);
+});
+
+test('安全窗口评估：三角支承面上的偏心姿态', () => {
+  const tri = convexHull([
+    { x: 2, y: -2 },
+    { x: 2, y: 2 },
+    { x: -2, y: 2 },
+  ]);
+  const inside = assessSafetyWindow(tri, { x: 0.9, y: 0.9 }, 0.75);
+  assert.equal(inside.inside, true);
+  assert.ok(Math.abs(inside.margin - 0.35) < 1e-9, '最近边为 x=2 / y=2，裕量 1.1-0.75');
+  const outside = assessSafetyWindow(tri, { x: -0.9, y: -0.9 }, 0.75);
+  assert.equal(outside.inside, false, '中心越出对角边');
+  assert.ok(outside.margin < 0);
 });

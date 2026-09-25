@@ -116,6 +116,46 @@ test('错误请求：坏 JSON / 未知路由 / 未知会话', async () => {
   });
 });
 
+test('安全窗口复核 API：200/400/404/409 与轨迹只读', async () => {
+  await withServer(async (base) => {
+    const created = await (await post(base, '/api/sessions', setup())).json();
+    const sid = created.sessionId;
+
+    const ok = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 1, extraError: 0.3 });
+    assert.equal(ok.status, 200);
+    const review = await ok.json();
+    assert.equal(review.revision, 1, '复核结果对应提交时的修订号');
+    assert.equal(review.extraError, 0.3);
+    assert.equal(review.postures.length, 4);
+    for (const w of review.postures) {
+      assert.equal(typeof w.inside, 'boolean');
+      assert.equal(typeof w.margin, 'number');
+      assert.ok(Array.isArray(w.region));
+      assert.ok(w.conclusion);
+    }
+
+    // 复核是只读操作：事件轨迹不变
+    const events = await (await fetch(`${base}/api/sessions/${sid}/events`)).json();
+    assert.equal(events.events.length, 1);
+
+    // 负误差 / 非整数修订号 → 400
+    assert.equal((await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 1, extraError: -0.5 })).status, 400);
+    assert.equal((await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 1.5, extraError: 0.1 })).status, 400);
+
+    // 未知会话 → 404
+    assert.equal((await post(base, '/api/sessions/nope/safety-window', { baseRevision: 1, extraError: 0.1 })).status, 404);
+
+    // 已接受操作推进修订号后，旧修订号复核 → 409，可用新修订号重新复核
+    await post(base, `/api/sessions/${sid}/ops`, { baseRevision: 1, op: { type: 'switch_posture', posture: 1 } });
+    const stale = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 1, extraError: 0.3 });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).state.revision, 2);
+    const fresh = await post(base, `/api/sessions/${sid}/safety-window`, { baseRevision: 2, extraError: 0.3 });
+    assert.equal(fresh.status, 200);
+    assert.equal((await fresh.json()).revision, 2);
+  });
+});
+
 test('静态目录路径穿越被拒绝', async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/../src/server.js`);

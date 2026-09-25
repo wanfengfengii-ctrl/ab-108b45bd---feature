@@ -91,6 +91,114 @@ function diskInsidePolygon(poly, c, r) {
   return true;
 }
 
+/** 多边形是否退化（顶点不足 3 个或面积近零）。 */
+function isDegeneratePolygon(poly) {
+  if (!Array.isArray(poly) || poly.length < 3) return true;
+  const coords = [];
+  for (const p of poly) coords.push(p.x, p.y);
+  return Math.abs(polygonArea(poly)) <= EPS * scaleOf(coords) ** 2;
+}
+
+/** 用半平面 edgeMargin(a, b, c) >= r 裁剪凸多边形（Sutherland–Hodgman）。 */
+function clipHalfPlane(poly, a, b, r, tol) {
+  const out = [];
+  const n = poly.length;
+  for (let i = 0; i < n; i += 1) {
+    const cur = poly[i];
+    const prev = poly[(i + n - 1) % n];
+    const dCur = edgeMargin(a, b, cur) - r;
+    const dPrev = edgeMargin(a, b, prev) - r;
+    const curIn = dCur >= -tol;
+    const prevIn = dPrev >= -tol;
+    if (curIn !== prevIn) {
+      const t = dPrev / (dPrev - dCur);
+      out.push({ x: prev.x + t * (cur.x - prev.x), y: prev.y + t * (cur.y - prev.y) });
+    }
+    if (curIn) out.push(cur);
+  }
+  return out;
+}
+
+/** 去掉相邻（含首尾）距离在容差内的重复顶点。 */
+function dedupeVertices(points, tol) {
+  const out = [];
+  for (const p of points) {
+    const last = out[out.length - 1];
+    if (!last || Math.hypot(p.x - last.x, p.y - last.y) > tol) out.push(p);
+  }
+  while (out.length > 1) {
+    const first = out[0];
+    const last = out[out.length - 1];
+    if (Math.hypot(first.x - last.x, first.y - last.y) > tol) break;
+    out.pop();
+  }
+  return out;
+}
+
+/**
+ * 安全窗口区域：CCW 凸多边形向内偏移 r 后，仍可完整容纳半径 r 圆盘的
+ * 投影中心闭合区域 = 各边内侧半平面（距离 >= r）的交集，仍为凸形。
+ * 返回顶点数组：可能为空集、单点、线段（退化）或正常多边形。
+ */
+function erodePolygon(poly, r) {
+  const coords = [r];
+  for (const p of poly) coords.push(p.x, p.y);
+  const tol = EPS * scaleOf(coords);
+  let out = poly.map((p) => ({ x: p.x, y: p.y }));
+  for (let i = 0; i < poly.length && out.length > 0; i += 1) {
+    out = clipHalfPlane(out, poly[i], poly[(i + 1) % poly.length], r, tol);
+  }
+  return dedupeVertices(out, tol);
+}
+
+function fmtNum(v) {
+  const rounded = Math.round(v * 1000) / 1000;
+  return String(Object.is(rounded, -0) ? 0 : rounded);
+}
+
+/**
+ * 单姿态安全窗口评估：在 CCW 支承凸包 poly 内，有效半径 r 的载荷圆盘
+ * 可放置投影中心的闭合区域、当前中心 center 是否落入、以及距最近安全边界的裕量。
+ *
+ * 返回 { region, empty, degenerate, inside, margin, conclusion }：
+ * - region    闭合区域顶点（空集为 []，退化为 1~2 点或近零面积多边形）；
+ * - inside    当前中心是否落入区域（边界接触 = 安全）；
+ * - margin    当前中心距最近安全边界的裕量，负值表示越出边界的距离；
+ * - conclusion 可解释结论（区域为空/退化时同样给出）。
+ */
+function assessSafetyWindow(poly, center, r) {
+  const coords = [center.x, center.y, r];
+  for (const p of poly) coords.push(p.x, p.y);
+  const tol = EPS * scaleOf(coords);
+
+  let margin = Infinity;
+  for (let i = 0; i < poly.length; i += 1) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    margin = Math.min(margin, edgeMargin(a, b, center) - r);
+  }
+  const inside = margin >= -tol;
+
+  const region = erodePolygon(poly, r);
+  const empty = region.length === 0;
+  const degenerate = !empty && isDegeneratePolygon(region);
+
+  const shownMargin = Math.abs(margin) < tol ? 0 : margin;
+  let conclusion;
+  if (empty) {
+    conclusion = `安全窗口为空：有效半径 ${fmtNum(r)} 的载荷圆盘在当前支承面内已不存在可完整容纳的投影中心位置`;
+  } else if (degenerate) {
+    conclusion = inside
+      ? `安全窗口退化为点/线段：当前中心处于边界接触位置（边界接触仍安全），裕量 ${fmtNum(Math.max(shownMargin, 0))}`
+      : `安全窗口退化为点/线段：当前中心不在窗口内，越出最近安全边界 ${fmtNum(-shownMargin)}`;
+  } else {
+    conclusion = inside
+      ? `当前中心位于安全窗口内，距最近安全边界裕量 ${fmtNum(shownMargin)}`
+      : `当前中心不在安全窗口内，越出最近安全边界 ${fmtNum(-shownMargin)}`;
+  }
+  return { region, empty, degenerate, inside, margin, conclusion };
+}
+
 /**
  * 支承安全评估：所有已部署支腿的凸包必须完整包含当前载荷圆盘。
  * 返回 { safe, hull, reason }；reason 为拒绝/不安全的中文说明（安全时为 null）。
@@ -105,10 +213,7 @@ function evaluateSupport(legs, posture) {
     };
   }
   const hull = convexHull(deployed);
-  const coords = [];
-  for (const p of hull) coords.push(p.x, p.y);
-  const degenerate = hull.length < 3 || Math.abs(polygonArea(hull)) <= EPS * scaleOf(coords) ** 2;
-  if (degenerate) {
+  if (isDegeneratePolygon(hull)) {
     return {
       safe: false,
       hull,
@@ -132,5 +237,8 @@ module.exports = {
   polygonArea,
   edgeMargin,
   diskInsidePolygon,
+  isDegeneratePolygon,
+  erodePolygon,
+  assessSafetyWindow,
   evaluateSupport,
 };
