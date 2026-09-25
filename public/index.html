@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>移动式穹顶测绘平台 · 安全操作演练</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>移动式穹顶测绘平台 · 安全操作演练</h1>
+    <p class="hint">收车或调整仪器姿态前，先在浏览器中演练操作次序：每次只能切换一个载荷姿态，或收放一只支腿；任何会令载荷圆盘越界的操作都会被拒绝。</p>
+  </header>
+
+  <section id="statusbar" class="hidden">
+    <span>修订号 <strong id="st-revision">—</strong></span>
+    <span>支腿 <span id="st-legs">—</span></span>
+    <span>当前姿态 <strong id="st-posture">—</strong></span>
+    <span>支承 <strong id="st-safe">—</strong></span>
+    <span class="rejection">最近拒绝 <strong id="st-rejection">无</strong></span>
+  </section>
+
+  <main>
+    <section id="setup" class="panel">
+      <h2>1. 录入平台参数</h2>
+      <div class="columns">
+        <div>
+          <h3>支腿（4~6 只）</h3>
+          <table id="legs-table">
+            <thead><tr><th></th><th>X</th><th>Y</th><th>已部署</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <button id="add-leg" type="button">+ 添加支腿</button>
+        </div>
+        <div>
+          <h3>载荷姿态（4~8 个）</h3>
+          <table id="postures-table">
+            <thead><tr><th></th><th>中心 X</th><th>中心 Y</th><th>不确定半径</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <button id="add-posture" type="button">+ 添加姿态</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="load-example" type="button">载入示例</button>
+        <button id="start" type="button" class="primary">开始演练</button>
+      </div>
+      <p id="setup-error" class="error"></p>
+    </section>
+
+    <section id="rehearsal" class="panel hidden">
+      <h2>2. 演练</h2>
+      <div class="stage">
+        <svg id="view" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" role="img"
+             aria-label="支承多边形与载荷圆盘视图"></svg>
+        <div class="controls">
+          <div class="control-block">
+            <h3>切换载荷姿态</h3>
+            <div class="row">
+              <select id="posture-select"></select>
+              <button id="switch-posture" type="button" class="primary">切换姿态</button>
+            </div>
+          </div>
+          <div class="control-block">
+            <h3>收放支腿</h3>
+            <div id="leg-buttons" class="leg-buttons"></div>
+          </div>
+          <div class="control-block">
+            <h3>会话</h3>
+            <button id="new-session" type="button">重新录入参数</button>
+          </div>
+          <p class="legend">
+            <span class="swatch swatch-hull"></span>支承凸包
+            <span class="swatch swatch-leg"></span>已部署支腿
+            <span class="swatch swatch-leg-off"></span>已收起支腿
+            <span class="swatch swatch-disk"></span>当前载荷圆盘
+          </p>
+        </div>
+      </div>
+      <p id="op-message" class="error"></p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

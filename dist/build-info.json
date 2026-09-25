@@ -1,0 +1,6 @@
+{
+  "builtAt": "2026-09-25T14:15:02.026Z",
+  "node": "v22.23.2",
+  "files": 10,
+  "entry": "src/server.js"
+}

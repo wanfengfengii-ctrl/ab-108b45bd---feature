@@ -1,0 +1,17 @@
+{
+  "name": "dome-survey-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "移动式穹顶测绘平台安全操作演练（事件溯源 + 支承几何校验）",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "build": "node scripts/build.js",
+    "smoke": "node scripts/smoke.js",
+    "verify": "npm run test && npm run build && npm run smoke"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
